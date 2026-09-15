@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-A medallion-architecture lakehouse demo: Postgres (raw OLTP) -> Databricks CDC job -> Databricks Unity Catalog `walmart` -> dbt (bronze/silver/gold) -> Airflow 3 orchestration. Built from a YouTube tutorial (see [README.md](README.md)). Ingestion into bronze happens in a Databricks job that is **not in this repo**; Airflow only triggers it by job id.
+A medallion-architecture lakehouse demo: Postgres (raw OLTP) -> Databricks CDC job -> Databricks Unity Catalog `walmart` -> dbt (bronze/silver/gold) -> Airflow 3 orchestration. See [README.md](README.md) for the full build guide. Ingestion into bronze happens in a Databricks job that is **not in this repo**; Airflow only triggers it by job id.
 
 ## Layout
 

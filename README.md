@@ -1,10 +1,12 @@
 # Walmart Data Engineering Project
 
+![Walmart Data Engineering with Airflow and dbt](walmart_dbt.png)
+
 An end-to-end lakehouse pipeline. PostgreSQL holds the operational data. A Databricks job moves
 changed rows into a bronze Delta layer. dbt builds the silver and gold layers. Apache Airflow
 runs the steps in order.
 
-Video walkthrough: https://youtu.be/ZEE-jNAthB0?si=ABQX_ApyBbGDD5SZ
+The guide below takes you from an empty database to a verified gold layer in 11 steps.
 
 ## Architecture
 
@@ -415,3 +417,9 @@ docker compose exec airflow-worker bash -lc "cd /opt/airflow/walmart_project && 
   the code to a public repository.
 - The `airflow_dbt_project/logs` directory is in Git, and the repository has no root
   `.gitignore`.
+
+## Author
+
+Built by **Muhammad Syakeer bin Abdul Rahman**.
+
+- GitHub: [@SyakeerRahman](https://github.com/SyakeerRahman)
