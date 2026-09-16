@@ -315,6 +315,9 @@ One loop then writes the `SELECT` list. A second loop writes the `FROM` clause, 
 `LEFT JOIN` for each table after the first one.
 
 - The first dictionary in the list is the driving table. It has no `join_condition`.
+- Every join must keep the grain at one row for each order item. Employees are absent for that
+  reason: an order has no employee, so a join on `store_id` attached all 10 employees of the
+  store to every order. `dim_employees` reads `employees_t` instead.
 - To add a column, edit the `columns` string in the dictionary. Do not edit the SQL below the
   list.
 - The column names get a prefix for each entity, for example `customer_city` and `store_city`.
@@ -508,6 +511,7 @@ Query these tables in Databricks:
 | `walmart.bronze.orders` | 10000 rows |
 | `walmart.silver_t.orders_t` | 10000 rows, plus a `processed_at` column |
 | `walmart.silver_b.obt_b` | 30021 rows, one row for each order item |
+| `walmart.gold.dim_employees` | 250 rows, built from `employees_t`, not from `obt_b` |
 | `walmart.gold.dim_customers` | 2000 rows, plus the `dbt_valid_from` and `dbt_valid_to` columns |
 | `walmart.gold.fact_orders` | 30021 rows |
 
@@ -533,6 +537,8 @@ docker compose exec airflow-worker bash -lc "cd /opt/airflow/dbt && dbt snapshot
   incremental path work, edit a CSV, raise the `updated_timestamp` values, and upload it again.
 - `obt_b.sql` writes the full `walmart.silver_t.*` table names instead of `ref()`. dbt therefore
   does not know that the silver technical layer comes first, and only the DAG enforces the order.
+- `fact_orders` has no `employee_id`. The schema gives no relationship between an order and an
+  employee, so that key does not belong at this grain.
 - Source freshness gives a warning but never an error. The sample data carries fixed timestamps,
   so an error threshold would stop every run.
 

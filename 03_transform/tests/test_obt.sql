@@ -1,14 +1,15 @@
+-- Every key in the One Big Table must hold a value.
+-- employee_id is absent by design. See obt_b.sql.
+
 {{ config(severity='warn') }}
 
-SELECT 1 
-FROM 
+SELECT 1
+FROM
     {{ ref('obt_b') }} AS obt
-WHERE 
+WHERE
     obt.order_id IS NULL
 OR
     obt.product_id IS NULL
-OR
-    obt.employee_id IS NULL
 OR
     obt.store_id IS NULL
 OR

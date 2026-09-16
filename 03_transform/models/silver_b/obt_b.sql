@@ -1,3 +1,16 @@
+{#
+  The One Big Table. One row for each order item.
+
+  Employees are deliberately absent. The schema has no relationship between an
+  order and an employee: the orders table carries customer_id and store_id only.
+  A join on store_id matched every employee of that store, which multiplied each
+  order row by 10 and made SUM(total_amount) 36 times too large.
+  dim_employees is built from employees_t instead. See eph_employees.sql.
+
+  To add a column or a table, edit the configs list below. Do not edit the SQL
+  under it.
+#}
+
 {% set configs =[
 
     {
@@ -67,23 +80,6 @@
         "join_condition": "oi.product_id = p.product_id"
     },
 
-
-    {
-        "table": "walmart.silver_t.employees_t",
-        "columns":"""        e.employee_id,
-                                e.first_name AS employee_first_name,
-                                e.last_name AS employee_last_name,
-                                e.email AS employee_email,
-                                e.job_title,
-                                e.salary,
-                                e.created_timestamp AS employee_created_timestamp,
-                                e.updated_timestamp AS employee_updated_timestamp,
-                                e.is_active AS employee_is_active,
-                                e.processed_at AS employee_processed_at
-                    """,
-        "alias": "e",
-        "join_condition": "o.store_id = e.store_id"
-    },
 
     {
         "table": "walmart.silver_t.stores_t",

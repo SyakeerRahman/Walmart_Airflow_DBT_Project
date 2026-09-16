@@ -53,7 +53,7 @@ Layer contract, which drives where new models go:
 1. **source** ([models/source/sources.yml](03_transform/models/source/sources.yml)) points at `walmart.bronze.*`, populated by the external Databricks CDC job.
 2. **silver_t** (technical): one model per source table, `materialized='incremental'` keyed on the table PK, watermarked on `updated_timestamp > max(updated_timestamp)`. Adds only `processed_at`. `SELECT *`, no reshaping.
 3. **silver_b** (business): a single wide OBT, [obt_b.sql](03_transform/models/silver_b/obt_b.sql). Built by a Jinja loop over a `configs` list of `{table, columns, alias, join_condition}` dicts. To add a column or a joined table, edit that list, not the SELECT at the bottom.
-4. **gold/ephemeral**: `materialized='ephemeral'`, one per entity, `SELECT DISTINCT` off `ref('obt_b')`. They exist purely as snapshot inputs and never land as tables. The `gold_ephemeral` DAG task runs `dbt compile`, not `dbt run` - `run` has nothing to build for an ephemeral selection.
+4. **gold/ephemeral**: `materialized='ephemeral'`, one per entity, `SELECT DISTINCT` off `ref('obt_b')` - **except `eph_employees`, which reads `ref('employees_t')`**. They exist purely as snapshot inputs and never land as tables. The `gold_ephemeral` DAG task runs `dbt compile`, not `dbt run` - `run` has nothing to build for an ephemeral selection.
 5. **snapshots/**: YAML-only snapshots (dbt 1.9+ style) turning each ephemeral model into a SCD2 dim in `walmart.gold`, timestamp strategy on that entity's `*_updated_timestamp`, with `dbt_valid_to_current` set to `9999-12-31` instead of NULL.
 6. **gold/fact**: [fact_orders.sql](03_transform/models/gold/fact/fact_orders.sql), keys plus measures off `ref('obt_b')`.
 
@@ -72,4 +72,5 @@ Layer contract, which drives where new models go:
 - Volume mode needs explicit DDL schemas (`SCHEMAS` dict) because CSV type inference is unreliable. They mirror `01_source/ddl/walmart_schema.sql` - keep the two in sync if a column changes.
 - Bronze is a faithful mirror: the CDC job adds **no** audit columns. `silver_t` models are `SELECT *`, so any column added to bronze silently flows downstream and can break the incremental models (`on_schema_change` is unset).
 - `obt_b.sql` bypasses `ref()`, so the silver_t -> silver_b edge exists only in the DAG (see Conventions).
+- **`obt_b` grain is one row per `order_item_id` (30,021). Guard it.** Employees were joined `o.store_id = e.store_id`, which fanned every order out by the 10 employees of its store: 300,513 rows and `SUM(total_amount)` 36x too high. `orders` has no `employee_id`, so there is no correct join - employees are out of the OBT and `fact_orders` carries no `employee_id`. Before adding any table to the `configs` list, confirm it is 1:1 against the current grain.
 - Source freshness is warn-only (`warn_after: 24 hours`, no `error_after`). The seed data has fixed timestamps, so an error threshold would fail every run.
