@@ -28,11 +28,12 @@ The script never writes a credential to disk.
 
 import os
 import sys
+import time
 from pathlib import Path
 
 from databricks.sdk import WorkspaceClient
 from databricks.sdk.service import jobs
-from databricks.sdk.service.catalog import VolumeType
+from databricks.sdk.service.sql import StatementState
 from databricks.sdk.service.workspace import ImportFormat, Language
 
 CATALOG = "walmart"
@@ -60,44 +61,56 @@ def step(number: int, message: str) -> None:
     print(f"\n[{number}/6] {message}")
 
 
+def warehouse_id() -> str:
+    """Take the warehouse ID from the end of the HTTP path."""
+    http_path = os.environ.get("DATABRICKS_HTTP_PATH", "")
+    if not http_path:
+        raise ValueError("DATABRICKS_HTTP_PATH is not set.")
+    return http_path.rstrip("/").split("/")[-1]
+
+
+def run_sql(w: WorkspaceClient, statement: str, timeout_seconds: int = 300) -> None:
+    """Run one SQL statement and wait for the result.
+
+    Unity Catalog DDL goes through SQL, not through the catalog API. On a
+    workspace with Default Storage the API asks for a storage location, but SQL
+    does not, which is the behaviour the web interface uses.
+    """
+    response = w.statement_execution.execute_statement(
+        warehouse_id=warehouse_id(), statement=statement, wait_timeout="30s"
+    )
+
+    deadline = time.time() + timeout_seconds
+    while response.status.state in (StatementState.PENDING, StatementState.RUNNING):
+        if time.time() > deadline:
+            raise TimeoutError(f"Statement did not finish in {timeout_seconds}s: {statement}")
+        time.sleep(3)
+        response = w.statement_execution.get_statement(response.statement_id)
+
+    if response.status.state != StatementState.SUCCEEDED:
+        message = response.status.error.message if response.status.error else "unknown error"
+        raise RuntimeError(f"{statement}\n  -> {message}")
+
+
 def create_catalog(w: WorkspaceClient) -> None:
     step(1, f"Catalog '{CATALOG}'")
-    existing = {c.name for c in w.catalogs.list()}
-    if CATALOG in existing:
-        print(f"  exists")
-        return
-    w.catalogs.create(name=CATALOG)
-    print(f"  created")
+    print("  waiting for the SQL warehouse to start, this can take a minute")
+    run_sql(w, f"CREATE CATALOG IF NOT EXISTS {CATALOG}")
+    print("  ready")
 
 
 def create_schemas(w: WorkspaceClient) -> None:
     step(2, f"Schemas in '{CATALOG}'")
-    existing = {s.name for s in w.schemas.list(catalog_name=CATALOG)}
     for schema in SCHEMAS:
-        if schema in existing:
-            print(f"  {schema}: exists")
-        else:
-            w.schemas.create(name=schema, catalog_name=CATALOG)
-            print(f"  {schema}: created")
+        run_sql(w, f"CREATE SCHEMA IF NOT EXISTS {CATALOG}.{schema}")
+        print(f"  {schema}: ready")
 
 
 def create_volume(w: WorkspaceClient) -> str:
     step(3, f"Volume '{CATALOG}.{VOLUME_SCHEMA}.{VOLUME_NAME}'")
     path = f"/Volumes/{CATALOG}/{VOLUME_SCHEMA}/{VOLUME_NAME}"
-    existing = {
-        v.name for v in w.volumes.list(catalog_name=CATALOG, schema_name=VOLUME_SCHEMA)
-    }
-    if VOLUME_NAME in existing:
-        print(f"  exists at {path}")
-        return path
-
-    w.volumes.create(
-        catalog_name=CATALOG,
-        schema_name=VOLUME_SCHEMA,
-        name=VOLUME_NAME,
-        volume_type=VolumeType.MANAGED,
-    )
-    print(f"  created at {path}")
+    run_sql(w, f"CREATE VOLUME IF NOT EXISTS {CATALOG}.{VOLUME_SCHEMA}.{VOLUME_NAME}")
+    print(f"  ready at {path}")
     return path
 
 
