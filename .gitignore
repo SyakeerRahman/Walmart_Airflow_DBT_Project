@@ -1,0 +1,30 @@
+# Secrets
+.env
+*.pem
+*.key
+
+# Airflow
+04_orchestration/logs/
+04_orchestration/plugins/
+airflow.db
+airflow-webserver.pid
+standalone_admin_password.txt
+
+# dbt
+03_transform/target/
+03_transform/dbt_packages/
+03_transform/logs/
+03_transform/.user.yml
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.ipynb_checkpoints/
+
+# OS and editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

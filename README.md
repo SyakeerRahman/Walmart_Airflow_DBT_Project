@@ -1,6 +1,6 @@
 # Walmart Data Engineering Project
 
-![Walmart Data Engineering with Airflow and dbt](walmart_dbt.png)
+![Walmart Data Engineering with Airflow and dbt](docs/images/banner.png)
 
 An end-to-end lakehouse pipeline. PostgreSQL holds the operational data. A Databricks job moves
 changed rows into a bronze Delta layer. dbt builds the silver and gold layers. Apache Airflow
@@ -29,6 +29,40 @@ walmart.gold.*              5 SCD2 dimensions + 1 fact table
 Apache Airflow triggers each step. The Airflow stack runs in Docker on your machine. Databricks
 does the compute.
 
+## Repository layout
+
+The directories follow the order of the pipeline.
+
+```
+01_source/           The operational PostgreSQL database
+  ddl/               Table definitions
+  data/              6 sample CSV files
+  load_data.py       Bulk loader
+
+02_ingestion/        The Databricks CDC job (Step 4 builds this)
+
+03_transform/        The dbt project
+  models/source/     Bronze source declarations
+  models/silver_t/   6 incremental technical models
+  models/silver_b/   The One Big Table
+  models/gold/       Ephemeral models and the fact table
+  snapshots/         5 SCD2 dimensions
+  macros/            Schema name override
+  tests/             Singular tests
+
+04_orchestration/    The Airflow stack
+  docker-compose.yaml
+  Dockerfile
+  requirements.txt
+  config/
+  dags/              The orchestrate DAG
+
+docs/images/         Diagrams and the banner
+```
+
+Copy `.env.example` to `04_orchestration/.env` before the first run. The real `.env` stays out
+of Git.
+
 ## What you need first
 
 | Item | Purpose |
@@ -52,7 +86,7 @@ A free Databricks trial and a free hosted PostgreSQL instance are sufficient.
    CREATE SCHEMA raw;
    ```
 
-3. Run [walmart_dataset/ddl/walmart_schema.sql](walmart_dataset/ddl/walmart_schema.sql) in that
+3. Run [01_source/ddl/walmart_schema.sql](01_source/ddl/walmart_schema.sql) in that
    schema. Set `search_path` to `raw` first, because the DDL file does not qualify the table
    names.
 
@@ -62,12 +96,12 @@ column. The CDC job and the dbt incremental models both use `updated_timestamp`.
 
 ## Step 2 - Load the sample data
 
-1. Open [walmart_dataset/load_data.py](walmart_dataset/load_data.py).
+1. Open [01_source/load_data.py](01_source/load_data.py).
 2. Replace `your_connection_string_here` with your PostgreSQL connection string.
-3. Run the loader from the `walmart_dataset` directory:
+3. Run the loader from the `01_source` directory:
 
    ```powershell
-   cd walmart_dataset
+   cd 01_source
    pip install psycopg2-binary
    python load_data.py
    ```
@@ -82,7 +116,7 @@ products, 250 employees, 10000 orders, and 30021 order items.
 3. Create a SQL warehouse. Copy its **Server hostname** and its **HTTP path**.
 4. Create a personal access token. Copy the token value now, because Databricks shows it one time.
 
-The schema names are not free choices. [dbt_project.yml](airflow_dbt_project/walmart_project/dbt_project.yml)
+The schema names are not free choices. [dbt_project.yml](03_transform/dbt_project.yml)
 and the snapshot files write these exact names.
 
 ## Step 4 - Build the CDC ingestion job
@@ -108,12 +142,12 @@ Then do this:
 ## Step 5 - Create the dbt project
 
 The finished dbt project is in
-[airflow_dbt_project/walmart_project/](airflow_dbt_project/walmart_project/). To build it from
+[03_transform/](03_transform/). To build it from
 nothing, run `dbt init walmart_project` and then add the files below.
 
 ### 5a - Connection profile
 
-Put [profiles.yml](airflow_dbt_project/walmart_project/profiles.yml) **inside** the project
+Put [profiles.yml](03_transform/profiles.yml) **inside** the project
 directory, not in `~/.dbt`. dbt reads the working directory, so every command in this project
 works without the `--profiles-dir` flag.
 
@@ -135,7 +169,7 @@ Replace the 3 placeholder values with the values from Step 3.
 
 ### 5b - Schema routing
 
-[dbt_project.yml](airflow_dbt_project/walmart_project/dbt_project.yml) sends each model directory
+[dbt_project.yml](03_transform/dbt_project.yml) sends each model directory
 to its own schema:
 
 ```yaml
@@ -155,14 +189,14 @@ models:
 ```
 
 By default, dbt puts a prefix on a custom schema name. The result is `dbt_schema_silver_t`. The
-macro [macros/custom_schema.sql](airflow_dbt_project/walmart_project/macros/custom_schema.sql)
+macro [macros/custom_schema.sql](03_transform/macros/custom_schema.sql)
 overrides that behavior. It returns the custom name without a change, so the models land in
 `walmart.silver_t` and not in `walmart.dbt_schema_silver_t`. Add this macro before you run any
 model.
 
 ### 5c - Sources
 
-[models/source/sources.yml](airflow_dbt_project/walmart_project/models/source/sources.yml) points
+[models/source/sources.yml](03_transform/models/source/sources.yml) points
 dbt at the 6 bronze tables from Step 4.
 
 ## Step 6 - Build the silver technical layer
@@ -189,12 +223,12 @@ Rules for this layer:
 - The `is_incremental()` block makes the first run a full load and every later run a delta load.
 
 Add the data tests in
-[models/silver_t/properties.yml](airflow_dbt_project/walmart_project/models/silver_t/properties.yml).
+[models/silver_t/properties.yml](03_transform/models/silver_t/properties.yml).
 The file tests `product_id` and `order_id` for `not_null` and `unique`.
 
 ## Step 7 - Build the One Big Table
 
-[models/silver_b/obt_b.sql](airflow_dbt_project/walmart_project/models/silver_b/obt_b.sql) joins
+[models/silver_b/obt_b.sql](03_transform/models/silver_b/obt_b.sql) joins
 the 6 silver tables into 1 wide table. The model is metadata driven. A Jinja list holds one
 dictionary for each table:
 
@@ -265,16 +299,16 @@ This YAML format needs dbt 1.9 or later.
 
 ### 8c - Fact table
 
-[models/gold/fact/fact_orders.sql](airflow_dbt_project/walmart_project/models/gold/fact/fact_orders.sql)
+[models/gold/fact/fact_orders.sql](03_transform/models/gold/fact/fact_orders.sql)
 holds the 6 keys and the 4 measures from `ref('obt_b')`.
 
 Add the singular test
-[tests/test_obt.sql](airflow_dbt_project/walmart_project/tests/test_obt.sql). The test finds a row
+[tests/test_obt.sql](03_transform/tests/test_obt.sql). The test finds a row
 with a `NULL` key. Its severity is `warn`, so a problem does not stop the pipeline.
 
 ## Step 9 - Set up Airflow in Docker
 
-Work in the `airflow_dbt_project` directory.
+Work in the `04_orchestration` directory.
 
 1. Get the official Compose file:
 
@@ -290,13 +324,13 @@ Work in the `airflow_dbt_project` directory.
        - ${AIRFLOW_PROJ_DIR:-.}/logs:/opt/airflow/logs
        - ${AIRFLOW_PROJ_DIR:-.}/config:/opt/airflow/config
        - ${AIRFLOW_PROJ_DIR:-.}/plugins:/opt/airflow/plugins
-       - ${AIRFLOW_PROJ_DIR:-.}/walmart_project:/opt/airflow/walmart_project
+       - ../03_transform:/opt/airflow/dbt
    ```
 
-   The last line is the important one. dbt must see the project at
-   `/opt/airflow/walmart_project` inside the containers.
+   The last line is the important one. The dbt project lives one directory up, and the
+   containers must see it at `/opt/airflow/dbt`.
 
-3. Write [requirements.txt](airflow_dbt_project/requirements.txt):
+3. Write [requirements.txt](04_orchestration/requirements.txt):
 
    ```
    airflow-operators>=0.11.0
@@ -307,7 +341,7 @@ Work in the `airflow_dbt_project` directory.
 
    Save this file as UTF-8. The current file is UTF-16, and `pip` can fail to read that encoding.
 
-4. Write [Dockerfile](airflow_dbt_project/Dockerfile). It extends the Airflow image and installs
+4. Write [Dockerfile](04_orchestration/Dockerfile). It extends the Airflow image and installs
    the requirements:
 
    ```dockerfile
@@ -346,7 +380,7 @@ Work in the `airflow_dbt_project` directory.
 
 ## Step 10 - Write the DAG
 
-[dags/orchestrate.py](airflow_dbt_project/dags/orchestrate.py) holds 1 DAG with 10 tasks in a
+[dags/orchestrate.py](04_orchestration/dags/orchestrate.py) holds 1 DAG with 10 tasks in a
 straight line:
 
 ```
@@ -361,7 +395,7 @@ Two task types do the work:
 - `ingest_cdc` is a Python task. It calls `WorkspaceClient.jobs.run_now()` with your Databricks
   job ID. Then it polls `jobs.get_run()` every 5 seconds. It stops the DAG when the job result is
   not `SUCCESS`.
-- Every dbt step is a `BashOperator` with `cwd='/opt/airflow/walmart_project'`. The `cwd`
+- Every dbt step is a `BashOperator` with `cwd='/opt/airflow/dbt'`. The `cwd`
   parameter puts dbt in the project directory, so dbt finds `profiles.yml` there.
 
 Put your Databricks host, token, and job ID at the top of the `ingest_cdc` function.
@@ -400,9 +434,9 @@ new version of each changed row.
 The dbt commands run inside the containers. Use this form:
 
 ```powershell
-docker compose exec airflow-worker bash -lc "cd /opt/airflow/walmart_project && dbt run --select silver_t"
-docker compose exec airflow-worker bash -lc "cd /opt/airflow/walmart_project && dbt test --select products_t"
-docker compose exec airflow-worker bash -lc "cd /opt/airflow/walmart_project && dbt snapshot"
+docker compose exec airflow-worker bash -lc "cd /opt/airflow/dbt && dbt run --select silver_t"
+docker compose exec airflow-worker bash -lc "cd /opt/airflow/dbt && dbt test --select products_t"
+docker compose exec airflow-worker bash -lc "cd /opt/airflow/dbt && dbt snapshot"
 ```
 
 ## Known limitations
@@ -412,11 +446,12 @@ docker compose exec airflow-worker bash -lc "cd /opt/airflow/walmart_project && 
   models are ephemeral and `gold_facts` compiles them anyway.
 - The `source_freshness` task runs `dbt source freshness`, but `sources.yml` declares no
   `loaded_at_field` and no `freshness` block.
-- The credentials are placeholder strings in 3 files: `dags/orchestrate.py`, `profiles.yml`, and
-  `load_data.py`. Move them to environment variables or to an Airflow connection before you push
-  the code to a public repository.
-- The `airflow_dbt_project/logs` directory is in Git, and the repository has no root
-  `.gitignore`.
+- The credentials are placeholder strings in 3 files:
+  [04_orchestration/dags/orchestrate.py](04_orchestration/dags/orchestrate.py),
+  [03_transform/profiles.yml](03_transform/profiles.yml), and
+  [01_source/load_data.py](01_source/load_data.py). The next task on the list moves them to
+  environment variables and an Airflow connection.
+- The `02_ingestion` directory is empty. The Databricks CDC job from Step 4 belongs there.
 
 ## Author
 
