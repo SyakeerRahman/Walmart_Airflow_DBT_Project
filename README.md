@@ -39,7 +39,8 @@ The directories follow the order of the pipeline.
   data/              6 sample CSV files
   load_data.py       Bulk loader
 
-02_ingestion/        The Databricks CDC job (Step 4 builds this)
+02_ingestion/        The Databricks CDC job
+  cdc_bronze.py      PostgreSQL -> bronze Delta, merge on the primary key
 
 03_transform/        The dbt project
   models/source/     Bronze source declarations
@@ -126,25 +127,46 @@ the variable is empty.
 The schema names are not free choices. [dbt_project.yml](03_transform/dbt_project.yml)
 and the snapshot files write these exact names.
 
-## Step 4 - Build the CDC ingestion job
+## Step 4 - Set up the CDC ingestion job
 
-This repository does not contain the ingestion job. You create it in Databricks. The Airflow DAG
-only starts it by job ID and then waits for the result.
+[02_ingestion/cdc_bronze.py](02_ingestion/cdc_bronze.py) is the PySpark job. It fills the bronze
+layer. The Airflow DAG starts it by job ID and then waits for the result.
 
-Write a PySpark notebook that does these actions for each of the 6 source tables:
+For each of the 6 source tables the job does this:
 
-1. Read the PostgreSQL table through the JDBC connector.
-2. Select only the rows with an `updated_timestamp` that is later than the maximum
-   `updated_timestamp` in the matching bronze table.
-3. Merge those rows into `walmart.bronze.<table>` on the primary key. Use `MERGE INTO`, so the
-   job updates the old rows and inserts the new rows.
-4. On the first run, write the full table, because the bronze table does not exist yet.
+1. Read the maximum `updated_timestamp` that is already in the bronze table.
+2. Ask PostgreSQL through JDBC for the rows that are newer than that value.
+3. Merge those rows into `walmart.bronze.<table>` on the primary key. The merge updates the old
+   rows and inserts the new rows.
+4. On the first run the bronze table does not exist, so the job reads the full table and creates
+   it.
 
-Then do this:
+### 4a - Store the database credentials
 
-1. Save the notebook as a Databricks job.
-2. Run the job one time by hand, to fill the bronze layer.
-3. Copy the job ID from the job page URL.
+The job holds no credentials. It reads 3 secrets from a Databricks secret scope:
+
+```bash
+databricks secrets create-scope walmart
+databricks secrets put-secret walmart pg-jdbc-url
+databricks secrets put-secret walmart pg-user
+databricks secrets put-secret walmart pg-password
+```
+
+The JDBC URL has this shape:
+
+```
+jdbc:postgresql://host:5432/dbname?sslmode=require
+```
+
+### 4b - Create the job
+
+1. Upload `cdc_bronze.py` to your workspace, or connect the workspace to this Git repository.
+2. Create a job with one task that points at the file.
+3. Install the PostgreSQL driver on the cluster. The Maven coordinate is
+   `org.postgresql:postgresql:42.7.4`.
+4. Give the cluster network access to your PostgreSQL host.
+5. Run the job one time by hand. The output prints the row count for each table.
+6. Copy the job ID from the job page URL. Step 9 puts it in `.env`.
 
 ## Step 5 - Create the dbt project
 
@@ -473,8 +495,8 @@ docker compose exec airflow-worker bash -lc "cd /opt/airflow/dbt && dbt snapshot
 
 ## Known limitations
 
-- The `02_ingestion` directory is empty. The Databricks CDC job from Step 4 belongs there, so
-  the pipeline does not run end to end yet.
+- The CDC job needs a cluster that can install a Maven library and reach your PostgreSQL host.
+  Serverless compute usually allows neither, so use a classic cluster.
 - `obt_b.sql` writes the full `walmart.silver_t.*` table names instead of `ref()`. dbt therefore
   does not know that the silver technical layer comes first, and only the DAG enforces the order.
 - Source freshness gives a warning but never an error. The sample data carries fixed timestamps,

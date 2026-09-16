@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-A medallion-architecture lakehouse demo: Postgres (raw OLTP) -> Databricks CDC job -> Databricks Unity Catalog `walmart` -> dbt (bronze/silver/gold) -> Airflow 3 orchestration. See [README.md](README.md) for the full build guide. Ingestion into bronze happens in a Databricks job that is **not in this repo**; Airflow only triggers it by job id.
+A medallion-architecture lakehouse demo: Postgres (raw OLTP) -> Databricks CDC job -> Databricks Unity Catalog `walmart` -> dbt (bronze/silver/gold) -> Airflow 3 orchestration. See [README.md](README.md) for the full build guide. Ingestion into bronze happens in a Databricks job ([02_ingestion/cdc_bronze.py](02_ingestion/cdc_bronze.py)) that runs *outside* this Airflow stack; Airflow only triggers it by job id and polls.
 
 ## Layout
 
@@ -13,7 +13,7 @@ Directories are numbered in pipeline order. Keep that convention when adding one
 | Path | Role |
 | --- | --- |
 | [01_source/](01_source/) | Seed CSVs, Postgres DDL, `load_data.py` loader. One-time setup of the source OLTP DB. |
-| [02_ingestion/](02_ingestion/) | Empty. The Databricks CDC job belongs here once written. |
+| [02_ingestion/cdc_bronze.py](02_ingestion/cdc_bronze.py) | PySpark CDC job. Runs **in Databricks**, not in Airflow. JDBC read from Postgres `raw.*`, watermarked on `updated_timestamp`, Delta `MERGE` into `walmart.bronze.*` on the PK. Airflow only triggers it by job id. |
 | [03_transform/](03_transform/) | The dbt project. Mounted into containers at `/opt/airflow/dbt` via a `../03_transform` relative volume in compose. |
 | [04_orchestration/](04_orchestration/) | Docker Compose Airflow 3.2 stack (CeleryExecutor + Postgres + Redis). |
 | [04_orchestration/dags/orchestrate.py](04_orchestration/dags/orchestrate.py) | The only DAG. Drives every dbt step as a Bash task. |
@@ -65,6 +65,7 @@ Layer contract, which drives where new models go:
 
 ## Known rough edges
 
-- `02_ingestion/` is empty. The Databricks CDC job that fills `walmart.bronze.*` is not in this repo yet.
+- `cdc_bronze.py` reads secrets from the Databricks scope `walmart` (keys `pg-jdbc-url`, `pg-user`, `pg-password`), falling back to `PG_JDBC_URL`/`PG_USER`/`PG_PASSWORD` env vars. Its cluster needs the Maven lib `org.postgresql:postgresql:42.7.4` and network reach to Postgres - serverless compute typically supports neither.
+- Bronze is a faithful mirror: the CDC job adds **no** audit columns. `silver_t` models are `SELECT *`, so any column added to bronze silently flows downstream and can break the incremental models (`on_schema_change` is unset).
 - `obt_b.sql` bypasses `ref()`, so the silver_t -> silver_b edge exists only in the DAG (see Conventions).
 - Source freshness is warn-only (`warn_after: 24 hours`, no `error_after`). The seed data has fixed timestamps, so an error threshold would fail every run.
