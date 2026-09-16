@@ -1,7 +1,19 @@
+version: 2
+
 sources:
   - name: walmart_databricks
-    database: walmart  
-    schema: bronze  
+    database: walmart
+    schema: bronze
+    description: >
+      Bronze Delta tables. The Databricks CDC job in 02_ingestion merges changed rows
+      into these tables from the source PostgreSQL database.
+
+    # Freshness measures the age of the newest row. The CDC job carries
+    # updated_timestamp over from the source, so it is the load marker.
+    loaded_at_field: updated_timestamp
+    freshness:
+      warn_after: {count: 24, period: hour}
+
     tables:
       - name: orders
       - name: customers
@@ -9,4 +21,3 @@ sources:
       - name: order_items
       - name: stores
       - name: employees
-

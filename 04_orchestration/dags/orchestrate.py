@@ -76,10 +76,13 @@ def orchestrate():
         bash_command='dbt test --select silver_b'
     )
 
-    gold_ephermeral = BashOperator(
-        task_id='gold_ephermeral',
+    # Ephemeral models never land as tables, so `dbt run` has nothing to build.
+    # `dbt compile` still parses and renders their SQL, which catches a broken
+    # ephemeral model here instead of inside the snapshot step below.
+    gold_ephemeral = BashOperator(
+        task_id='gold_ephemeral',
         cwd='/opt/airflow/dbt',
-        bash_command='dbt run --select gold/ephermeral'
+        bash_command='dbt compile --select gold.ephemeral'
     )
 
     gold_dimensions = BashOperator(
@@ -94,6 +97,17 @@ def orchestrate():
         bash_command='dbt run --select gold/fact'
     )
 
-    ingest_cdc() >> clean_target() >> source_freshness() >> silver_technical >> silver_technical_tests  >> silver_business >> silver_business_tests >> gold_ephermeral >> gold_dimensions >> gold_facts
+    (
+        ingest_cdc()
+        >> clean_target()
+        >> source_freshness()
+        >> silver_technical
+        >> silver_technical_tests
+        >> silver_business
+        >> silver_business_tests
+        >> gold_ephemeral
+        >> gold_dimensions
+        >> gold_facts
+    )
 
 orchestrate_dag = orchestrate()

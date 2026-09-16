@@ -112,10 +112,9 @@ variable. It holds no credentials.
    python 01_source\load_data.py
    ```
 
-The script stops with a clear message if the variable is empty.
-
 The script loads 6 CSV files with the `COPY` command. Expect 2000 customers, 25 stores, 500
-products, 250 employees, 10000 orders, and 30021 order items.
+products, 250 employees, 10000 orders, and 30021 order items. It stops with a clear message if
+the variable is empty.
 
 ## Step 3 - Prepare Databricks
 
@@ -208,7 +207,17 @@ model.
 ### 5c - Sources
 
 [models/source/sources.yml](03_transform/models/source/sources.yml) points
-dbt at the 6 bronze tables from Step 4.
+dbt at the 6 bronze tables from Step 4. It also declares freshness:
+
+```yaml
+    loaded_at_field: updated_timestamp
+    freshness:
+      warn_after: {count: 24, period: hour}
+```
+
+The CDC job carries `updated_timestamp` over from PostgreSQL, so that column shows the age of
+the newest row. There is no `error_after` threshold. The sample data has fixed timestamps, and
+an error threshold would stop every run.
 
 ## Step 6 - Build the silver technical layer
 
@@ -350,7 +359,7 @@ Work in the `04_orchestration` directory.
    dbt-databricks>=1.12.1
    ```
 
-   Save this file as UTF-8. The current file is UTF-16, and `pip` can fail to read that encoding.
+   Save this file as UTF-8. `pip` can fail to read a UTF-16 requirements file during the build.
 
 4. Write [Dockerfile](04_orchestration/Dockerfile). It extends the Airflow image and installs
    the requirements:
@@ -408,7 +417,7 @@ straight line:
 ingest_cdc -> clean_target -> source_freshness
            -> silver_technical -> silver_technical_tests
            -> silver_business  -> silver_business_tests
-           -> gold_ephermeral  -> gold_dimensions -> gold_facts
+           -> gold_ephemeral   -> gold_dimensions -> gold_facts
 ```
 
 Two task types do the work:
@@ -464,14 +473,12 @@ docker compose exec airflow-worker bash -lc "cd /opt/airflow/dbt && dbt snapshot
 
 ## Known limitations
 
-- The `gold_ephermeral` task runs `dbt run --select gold/ephermeral`. The directory name is
-  `gold/ephemeral`. The selector matches no model. The task still reports success, because the
-  models are ephemeral and `gold_facts` compiles them anyway.
-- The `source_freshness` task runs `dbt source freshness`, but `sources.yml` declares no
-  `loaded_at_field` and no `freshness` block.
-- The `02_ingestion` directory is empty. The Databricks CDC job from Step 4 belongs there.
-- `04_orchestration/requirements.txt` is UTF-16 encoded. Save it as UTF-8 if you edit it, because
-  `pip` can fail to read that encoding during the Docker build.
+- The `02_ingestion` directory is empty. The Databricks CDC job from Step 4 belongs there, so
+  the pipeline does not run end to end yet.
+- `obt_b.sql` writes the full `walmart.silver_t.*` table names instead of `ref()`. dbt therefore
+  does not know that the silver technical layer comes first, and only the DAG enforces the order.
+- Source freshness gives a warning but never an error. The sample data carries fixed timestamps,
+  so an error threshold would stop every run.
 
 ## Credentials
 

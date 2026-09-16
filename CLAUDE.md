@@ -44,14 +44,14 @@ docker compose exec airflow-worker bash -lc "cd /opt/airflow/dbt && dbt build --
 
 The DAG is one strict linear chain, no parallelism:
 
-`ingest_cdc` -> `clean_target` -> `source_freshness` -> `silver_technical` -> `silver_technical_tests` -> `silver_business` -> `silver_business_tests` -> `gold_ephermeral` -> `gold_dimensions` (`dbt snapshot`) -> `gold_facts`
+`ingest_cdc` -> `clean_target` -> `source_freshness` -> `silver_technical` -> `silver_technical_tests` -> `silver_business` -> `silver_business_tests` -> `gold_ephemeral` (`dbt compile`) -> `gold_dimensions` (`dbt snapshot`) -> `gold_facts`
 
 Layer contract, which drives where new models go:
 
 1. **source** ([models/source/sources.yml](03_transform/models/source/sources.yml)) points at `walmart.bronze.*`, populated by the external Databricks CDC job.
 2. **silver_t** (technical): one model per source table, `materialized='incremental'` keyed on the table PK, watermarked on `updated_timestamp > max(updated_timestamp)`. Adds only `processed_at`. `SELECT *`, no reshaping.
 3. **silver_b** (business): a single wide OBT, [obt_b.sql](03_transform/models/silver_b/obt_b.sql). Built by a Jinja loop over a `configs` list of `{table, columns, alias, join_condition}` dicts. To add a column or a joined table, edit that list, not the SELECT at the bottom.
-4. **gold/ephemeral**: `materialized='ephemeral'`, one per entity, `SELECT DISTINCT` off `ref('obt_b')`. They exist purely as snapshot inputs and never land as tables.
+4. **gold/ephemeral**: `materialized='ephemeral'`, one per entity, `SELECT DISTINCT` off `ref('obt_b')`. They exist purely as snapshot inputs and never land as tables. The `gold_ephemeral` DAG task runs `dbt compile`, not `dbt run` - `run` has nothing to build for an ephemeral selection.
 5. **snapshots/**: YAML-only snapshots (dbt 1.9+ style) turning each ephemeral model into a SCD2 dim in `walmart.gold`, timestamp strategy on that entity's `*_updated_timestamp`, with `dbt_valid_to_current` set to `9999-12-31` instead of NULL.
 6. **gold/fact**: [fact_orders.sql](03_transform/models/gold/fact/fact_orders.sql), keys plus measures off `ref('obt_b')`.
 
@@ -65,7 +65,6 @@ Layer contract, which drives where new models go:
 
 ## Known rough edges
 
-- `gold_ephermeral` runs `dbt run --select gold/ephermeral`, but the directory is `gold/ephemeral`. The selector matches nothing; the task passes because the models are ephemeral anyway and get inlined by `gold_facts`.
-- `dbt source freshness` runs but `sources.yml` declares no `loaded_at_field` or `freshness` block.
 - `02_ingestion/` is empty. The Databricks CDC job that fills `walmart.bronze.*` is not in this repo yet.
-- `04_orchestration/requirements.txt` is UTF-16 encoded. Rewrite it as UTF-8 if you touch it, or `pip install` in the Docker build will misread it.
+- `obt_b.sql` bypasses `ref()`, so the silver_t -> silver_b edge exists only in the DAG (see Conventions).
+- Source freshness is warn-only (`warn_after: 24 hours`, no `error_after`). The seed data has fixed timestamps, so an error threshold would fail every run.
