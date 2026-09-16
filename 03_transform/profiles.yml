@@ -8,7 +8,9 @@ walmart_project:
       catalog: walmart
       schema: dbt_schema
       threads: 1
-      host: "{{ env_var('DATABRICKS_HOST') }}"
+      # The Databricks SDK wants the scheme, this adapter wants a bare host name.
+      # DATABRICKS_HOST keeps the scheme for the SDK, and the filters remove it here.
+      host: "{{ env_var('DATABRICKS_HOST') | replace('https://', '') | replace('http://', '') | replace('/', '') }}"
       http_path: "{{ env_var('DATABRICKS_HTTP_PATH') }}"
       token: "{{ env_var('DATABRICKS_TOKEN') }}"
   target: dev

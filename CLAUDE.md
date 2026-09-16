@@ -38,6 +38,8 @@ docker compose exec airflow-worker bash -lc "cd /opt/airflow/dbt && dbt test --s
 docker compose exec airflow-worker bash -lc "cd /opt/airflow/dbt && dbt build --select obt_b+"      # model + downstream
 ```
 
+Base image is `apache/airflow:3.2.2`. **Never add `apache-airflow` to `requirements.txt`** - pip upgrades core without the image's pinned providers, and the Celery worker dies on boot with `AirflowOptionalProviderFeatureException`. After any Airflow version change, run `docker compose down -v`: the metadata DB keeps the old schema and every service refuses to start.
+
 `docker compose` needs `FERNET_KEY` set (compose reads it with no default). Copy `.env.example` to `04_orchestration/.env`; the real `.env` is gitignored.
 
 ## Pipeline shape
@@ -66,6 +68,7 @@ Layer contract, which drives where new models go:
 ## Known rough edges
 
 - `cdc_bronze.py` defaults to `volume` mode. Only `jdbc` mode needs secrets (scope `walmart`, keys `pg-jdbc-url`/`pg-user`/`pg-password`, env fallback `PG_JDBC_URL`/`PG_USER`/`PG_PASSWORD`), the Maven lib `org.postgresql:postgresql:42.7.4`, and a classic cluster. Serverless supports neither, which is why volume mode exists.
+- `profiles.yml` strips the scheme from `DATABRICKS_HOST` with Jinja filters. The SDK needs `https://`, dbt-databricks needs a bare host; leaving the scheme in makes the adapter build `https://https://...` and stall ~2min on a failed SPOG probe before connecting anyway.
 - Volume mode needs explicit DDL schemas (`SCHEMAS` dict) because CSV type inference is unreliable. They mirror `01_source/ddl/walmart_schema.sql` - keep the two in sync if a column changes.
 - Bronze is a faithful mirror: the CDC job adds **no** audit columns. `silver_t` models are `SELECT *`, so any column added to bronze silently flows downstream and can break the incremental models (`on_schema_change` is unset).
 - `obt_b.sql` bypasses `ref()`, so the silver_t -> silver_b edge exists only in the DAG (see Conventions).

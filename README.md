@@ -216,7 +216,7 @@ walmart_project:
       catalog: walmart
       schema: dbt_schema
       threads: 1
-      host: "{{ env_var('DATABRICKS_HOST') }}"
+      host: "{{ env_var('DATABRICKS_HOST') | replace('https://', '') | replace('/', '') }}"
       http_path: "{{ env_var('DATABRICKS_HTTP_PATH') }}"
       token: "{{ env_var('DATABRICKS_TOKEN') }}"
   target: dev
@@ -224,6 +224,9 @@ walmart_project:
 
 You set these 3 variables one time, in `04_orchestration/.env`, in Step 9. dbt stops with a
 clear message if a variable is missing.
+
+`DATABRICKS_HOST` keeps the `https://` prefix, because the Databricks SDK in the DAG needs it.
+This adapter wants a bare host name, so the filters remove the prefix here.
 
 ### 5b - Schema routing
 
@@ -401,19 +404,21 @@ Work in the `04_orchestration` directory.
 3. Write [requirements.txt](04_orchestration/requirements.txt):
 
    ```
-   airflow-operators>=0.11.0
-   apache-airflow>=3.2.2
    dbt-core>=1.11.11
    dbt-databricks>=1.12.1
    ```
 
    Save this file as UTF-8. `pip` can fail to read a UTF-16 requirements file during the build.
 
+   Do not add `apache-airflow` here. The base image already has it, and pip would upgrade
+   Airflow without upgrading the providers that come with the image. The Celery worker then
+   stops at start with an `AirflowOptionalProviderFeatureException`.
+
 4. Write [Dockerfile](04_orchestration/Dockerfile). It extends the Airflow image and installs
    the requirements:
 
    ```dockerfile
-   FROM apache/airflow:3.2.0
+   FROM apache/airflow:3.2.2
    USER root
    RUN apt-get update && apt-get install -y gcc && apt-get clean
    USER airflow
@@ -421,7 +426,8 @@ Work in the `04_orchestration` directory.
    RUN pip install --no-cache-dir -r requirements.txt
    ```
 
-   The Databricks SDK arrives with `dbt-databricks`, so the DAG can import it.
+   The Databricks SDK arrives with `dbt-databricks`, so the DAG can import it. `BashOperator`
+   comes with Airflow, so no operator package is necessary.
 
 5. Copy the template and fill it in. This file holds every credential in the project:
 

@@ -1,4 +1,2 @@
-airflow-operators>=0.11.0
-apache-airflow>=3.2.2
 dbt-core>=1.11.11
 dbt-databricks>=1.12.1
