@@ -1,8 +1,12 @@
+import os
 import time
 from airflow.sdk import dag, task
 from airflow.operators.bash import BashOperator
 from databricks.sdk import WorkspaceClient
 from databricks.sdk.service.jobs import RunLifeCycleState, RunResultState
+
+# Poll interval in seconds while the Databricks job runs.
+POLL_SECONDS = 5
 
 
 @dag
@@ -10,12 +14,18 @@ def orchestrate():
 
     @task
     def ingest_cdc():
-        ws = WorkspaceClient(
-        host="your_databricks_host",
-        token="your_databricks_token"
-        )
+        # WorkspaceClient() reads DATABRICKS_HOST and DATABRICKS_TOKEN from the
+        # environment. docker compose loads them from 04_orchestration/.env.
+        job_id = os.environ.get("DATABRICKS_JOB_ID")
+        if not job_id:
+            raise ValueError(
+                "DATABRICKS_JOB_ID is not set. Copy .env.example to "
+                "04_orchestration/.env and fill in the Databricks values."
+            )
 
-        job_trigger = ws.jobs.run_now(job_id="your_databricks_job_id")
+        ws = WorkspaceClient()
+
+        job_trigger = ws.jobs.run_now(job_id=job_id)
 
         while True:
 
@@ -28,7 +38,7 @@ def orchestrate():
                 else:
                     raise Exception(f"Job failed with state: {job_run.state.result_state}")
                     
-            time.sleep(5)  # Wait for 5 seconds before checking the job status again
+            time.sleep(POLL_SECONDS)
         
         return "CDC Ingestion Completed"
     

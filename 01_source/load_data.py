@@ -1,11 +1,19 @@
-import psycopg2
+"""Load the sample CSV files into the raw schema of the source PostgreSQL database.
+
+The connection string comes from the POSTGRES_CONN_STRING environment variable.
+Set it before you run this script:
+
+    PowerShell:  $env:POSTGRES_CONN_STRING = "postgresql://user:pass@host:5432/db"
+    Git Bash:    export POSTGRES_CONN_STRING="postgresql://user:pass@host:5432/db"
+"""
+
 import os
+import sys
 
-# Database connection string
-conn_string = "your_connection_string_here"
+import psycopg2
 
-# CSV files mapping to tables
-csv_files = {
+# CSV file to target table.
+CSV_FILES = {
     "customers.csv": "raw.customers",
     "stores.csv": "raw.stores",
     "products.csv": "raw.products",
@@ -14,34 +22,51 @@ csv_files = {
     "order_items.csv": "raw.order_items",
 }
 
-data_dir = "data"
+DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
 
-try:
-    # Connect to the database
-    conn = psycopg2.connect(conn_string)
-    cursor = conn.cursor()
-    
-    # Load each CSV file into its corresponding table
-    for csv_file, table_name in csv_files.items():
-        csv_path = os.path.join(data_dir, csv_file)
-        
-        if os.path.exists(csv_path):
+
+def main():
+    conn_string = os.environ.get("POSTGRES_CONN_STRING")
+    if not conn_string:
+        sys.exit(
+            "POSTGRES_CONN_STRING is not set.\n"
+            "See the docstring at the top of this file for the export command."
+        )
+
+    conn = None
+    try:
+        conn = psycopg2.connect(conn_string)
+        cursor = conn.cursor()
+
+        for csv_file, table_name in CSV_FILES.items():
+            csv_path = os.path.join(DATA_DIR, csv_file)
+
+            if not os.path.exists(csv_path):
+                print(f"[skip] file not found: {csv_path}")
+                continue
+
             print(f"Loading {csv_file} into {table_name}...")
-            
-            with open(csv_path, 'r') as f:
-                cursor.copy_expert(f"COPY {table_name} FROM STDIN WITH (FORMAT CSV, HEADER TRUE)", f)
-            
+            with open(csv_path, "r", encoding="utf-8") as handle:
+                cursor.copy_expert(
+                    f"COPY {table_name} FROM STDIN WITH (FORMAT CSV, HEADER TRUE)",
+                    handle,
+                )
             conn.commit()
-            print(f"✓ Successfully loaded {csv_file}")
-        else:
-            print(f"✗ File not found: {csv_path}")
-    
-    cursor.close()
-    conn.close()
-    print("\n✓ All data loaded successfully!")
-    
-except Exception as e:
-    print(f"Error: {e}")
-    if conn:
-        conn.rollback()
-        conn.close()
+            print(f"[ok] loaded {csv_file}")
+
+        cursor.close()
+        print("\nAll data loaded.")
+
+    except Exception as error:
+        print(f"Error: {error}")
+        if conn is not None:
+            conn.rollback()
+        sys.exit(1)
+
+    finally:
+        if conn is not None:
+            conn.close()
+
+
+if __name__ == "__main__":
+    main()

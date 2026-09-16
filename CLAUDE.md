@@ -61,11 +61,11 @@ Layer contract, which drives where new models go:
 - `obt_b.sql` hardcodes fully-qualified `walmart.silver_t.*` table names instead of `ref()`, so dbt does not see silver_t -> silver_b as a dependency. The DAG's task order is what enforces it. Keep new cross-layer edges in the DAG, or switch the whole file to `ref()`.
 - Singular tests live in [tests/](03_transform/tests/) and use `{{ config(severity='warn') }}` so a null key does not fail the run. Generic tests are in `models/silver_t/properties.yml`.
 - `clean_target` deletes `target/` and `logs/` on every run, so dbt never reuses a stale manifest.
+- **No credential is hardcoded anywhere.** `profiles.yml` uses `env_var()`; the DAG uses a bare `WorkspaceClient()` (the SDK reads `DATABRICKS_HOST`/`DATABRICKS_TOKEN` from the env) plus `os.environ` for `DATABRICKS_JOB_ID`; `load_data.py` reads `POSTGRES_CONN_STRING`. All container values come from `04_orchestration/.env` via the compose `env_file`. Keep it that way - never write a literal token into a tracked file.
 
 ## Known rough edges
 
 - `gold_ephermeral` runs `dbt run --select gold/ephermeral`, but the directory is `gold/ephemeral`. The selector matches nothing; the task passes because the models are ephemeral anyway and get inlined by `gold_facts`.
 - `dbt source freshness` runs but `sources.yml` declares no `loaded_at_field` or `freshness` block.
-- Credentials are placeholders in three files and must be filled before anything runs: `04_orchestration/dags/orchestrate.py` (Databricks host/token/job_id), `03_transform/profiles.yml` (host/http_path/token), `01_source/load_data.py` (Postgres conn string). Moving these to env vars and an Airflow connection is the next planned task; the repo is public.
 - `02_ingestion/` is empty. The Databricks CDC job that fills `walmart.bronze.*` is not in this repo yet.
 - `04_orchestration/requirements.txt` is UTF-16 encoded. Rewrite it as UTF-8 if you touch it, or `pip install` in the Docker build will misread it.

@@ -96,15 +96,23 @@ column. The CDC job and the dbt incremental models both use `updated_timestamp`.
 
 ## Step 2 - Load the sample data
 
-1. Open [01_source/load_data.py](01_source/load_data.py).
-2. Replace `your_connection_string_here` with your PostgreSQL connection string.
-3. Run the loader from the `01_source` directory:
+[01_source/load_data.py](01_source/load_data.py) reads the connection string from an environment
+variable. It holds no credentials.
+
+1. Install the driver:
 
    ```powershell
-   cd 01_source
    pip install psycopg2-binary
-   python load_data.py
    ```
+
+2. Set the connection string and run the loader:
+
+   ```powershell
+   $env:POSTGRES_CONN_STRING = "postgresql://user:pass@host:5432/dbname"
+   python 01_source\load_data.py
+   ```
+
+The script stops with a clear message if the variable is empty.
 
 The script loads 6 CSV files with the `COPY` command. Expect 2000 customers, 25 stores, 500
 products, 250 employees, 10000 orders, and 30021 order items.
@@ -151,21 +159,24 @@ Put [profiles.yml](03_transform/profiles.yml) **inside** the project
 directory, not in `~/.dbt`. dbt reads the working directory, so every command in this project
 works without the `--profiles-dir` flag.
 
+The file holds no credentials. The `env_var()` function reads them at run time:
+
 ```yaml
 walmart_project:
   outputs:
     dev:
       type: databricks
       catalog: walmart
-      host: your_databricks_host
-      http_path: your_databricks_http_path
-      token: your_databricks_token
       schema: dbt_schema
       threads: 1
+      host: "{{ env_var('DATABRICKS_HOST') }}"
+      http_path: "{{ env_var('DATABRICKS_HTTP_PATH') }}"
+      token: "{{ env_var('DATABRICKS_TOKEN') }}"
   target: dev
 ```
 
-Replace the 3 placeholder values with the values from Step 3.
+You set these 3 variables one time, in `04_orchestration/.env`, in Step 9. dbt stops with a
+clear message if a variable is missing.
 
 ### 5b - Schema routing
 
@@ -355,19 +366,29 @@ Work in the `04_orchestration` directory.
 
    The Databricks SDK arrives with `dbt-databricks`, so the DAG can import it.
 
-5. Write `.env`:
+5. Copy the template and fill it in. This file holds every credential in the project:
+
+   ```powershell
+   copy ..\.env.example .env
+   ```
 
    ```
    AIRFLOW_UID=50000
-   FERNET_KEY=<your key>
+   FERNET_KEY=<generated key>
+   DATABRICKS_HOST=<from Step 3>
+   DATABRICKS_TOKEN=<from Step 3>
+   DATABRICKS_HTTP_PATH=<from Step 3>
+   DATABRICKS_JOB_ID=<from Step 4>
    ```
 
-   The Compose file reads `FERNET_KEY` and gives it no default value. Generate a key with this
-   command:
+   Generate the Fernet key with this command:
 
    ```powershell
    python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
    ```
+
+   `.env` is in `.gitignore`. Compose loads it into every Airflow container, so the DAG and dbt
+   both read the same values. Never commit this file.
 
 6. Build the image and start the stack:
 
@@ -398,7 +419,9 @@ Two task types do the work:
 - Every dbt step is a `BashOperator` with `cwd='/opt/airflow/dbt'`. The `cwd`
   parameter puts dbt in the project directory, so dbt finds `profiles.yml` there.
 
-Put your Databricks host, token, and job ID at the top of the `ingest_cdc` function.
+The DAG holds no credentials. `WorkspaceClient()` takes `DATABRICKS_HOST` and `DATABRICKS_TOKEN`
+from the container environment, and the task reads `DATABRICKS_JOB_ID` the same way. The task
+fails with a clear message if the job ID is missing.
 
 The `clean_target` task removes the `target` and `logs` directories before each run. This step
 stops dbt from the use of an old manifest.
@@ -446,12 +469,25 @@ docker compose exec airflow-worker bash -lc "cd /opt/airflow/dbt && dbt snapshot
   models are ephemeral and `gold_facts` compiles them anyway.
 - The `source_freshness` task runs `dbt source freshness`, but `sources.yml` declares no
   `loaded_at_field` and no `freshness` block.
-- The credentials are placeholder strings in 3 files:
-  [04_orchestration/dags/orchestrate.py](04_orchestration/dags/orchestrate.py),
-  [03_transform/profiles.yml](03_transform/profiles.yml), and
-  [01_source/load_data.py](01_source/load_data.py). The next task on the list moves them to
-  environment variables and an Airflow connection.
 - The `02_ingestion` directory is empty. The Databricks CDC job from Step 4 belongs there.
+- `04_orchestration/requirements.txt` is UTF-16 encoded. Save it as UTF-8 if you edit it, because
+  `pip` can fail to read that encoding during the Docker build.
+
+## Credentials
+
+No credential is written in any tracked file. Everything reads from the environment.
+
+| Variable | Used by |
+|---|---|
+| `DATABRICKS_HOST` | The `ingest_cdc` task and dbt |
+| `DATABRICKS_TOKEN` | The `ingest_cdc` task and dbt |
+| `DATABRICKS_HTTP_PATH` | dbt |
+| `DATABRICKS_JOB_ID` | The `ingest_cdc` task |
+| `FERNET_KEY` | Airflow, to encrypt stored connections |
+| `POSTGRES_CONN_STRING` | `01_source/load_data.py`, on your machine only |
+
+The first five live in `04_orchestration/.env`, which `.gitignore` excludes. Use
+[.env.example](.env.example) as the template.
 
 ## Author
 

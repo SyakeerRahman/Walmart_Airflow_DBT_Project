@@ -76,6 +76,13 @@ x-airflow-common:
     _PIP_ADDITIONAL_REQUIREMENTS: ${_PIP_ADDITIONAL_REQUIREMENTS:-}
     # The following line can be used to set a custom config file, stored in the local config folder
     AIRFLOW_CONFIG: '/opt/airflow/config/airflow.cfg'
+    # Project credentials. The values live in .env, which is gitignored.
+    # The ingest_cdc task reads the first two through the Databricks SDK.
+    # dbt reads the first three through env_var() in 03_transform/profiles.yml.
+    DATABRICKS_HOST: ${DATABRICKS_HOST:-}
+    DATABRICKS_TOKEN: ${DATABRICKS_TOKEN:-}
+    DATABRICKS_HTTP_PATH: ${DATABRICKS_HTTP_PATH:-}
+    DATABRICKS_JOB_ID: ${DATABRICKS_JOB_ID:-}
   volumes:
     - ${AIRFLOW_PROJ_DIR:-.}/dags:/opt/airflow/dags
     - ${AIRFLOW_PROJ_DIR:-.}/logs:/opt/airflow/logs
