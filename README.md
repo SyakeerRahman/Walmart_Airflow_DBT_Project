@@ -11,7 +11,7 @@ The guide below takes you from an empty database to a verified gold layer in 11 
 ## Architecture
 
 ```
-PostgreSQL (raw schema)
+PostgreSQL (raw schema)  or  CSV files in a Unity Catalog volume
         |  CDC job (PySpark, runs in Databricks)
         v
 walmart.bronze.*            6 Delta tables
@@ -40,7 +40,7 @@ The directories follow the order of the pipeline.
   load_data.py       Bulk loader
 
 02_ingestion/        The Databricks CDC job
-  cdc_bronze.py      PostgreSQL -> bronze Delta, merge on the primary key
+  cdc_bronze.py      CSV volume or PostgreSQL -> bronze Delta, merge on the PK
 
 03_transform/        The dbt project
   models/source/     Bronze source declarations
@@ -70,15 +70,19 @@ of Git.
 |---|---|
 | Docker Desktop, 4 GB of memory or more | It runs the Airflow stack. |
 | A Databricks workspace with Unity Catalog | It runs the CDC job and the dbt models. |
-| A PostgreSQL database that Databricks can reach | It is the operational source. |
-| Python 3.9 or later, with `psycopg2` | It loads the sample data into PostgreSQL. |
+| A PostgreSQL database that Databricks can reach | Only for JDBC mode. See Step 4. |
+| Python 3.9 or later, with `psycopg2` | Only for JDBC mode. It loads the sample data. |
 | Git | It clones this repository. |
 
-A free Databricks trial and a free hosted PostgreSQL instance are sufficient.
+Databricks Free Edition is enough. It gives you serverless compute only, so follow volume mode
+in Step 4 and skip Step 1 and Step 2. PostgreSQL is needed only for JDBC mode, which needs a
+classic cluster.
 
 ---
 
 ## Step 1 - Create the source database
+
+**Skip this step in volume mode.** Volume mode reads the CSV files directly.
 
 1. Create an empty PostgreSQL database.
 2. Create the schema:
@@ -96,6 +100,8 @@ The DDL file creates 6 tables: `customers`, `stores`, `products`, `employees`, `
 column. The CDC job and the dbt incremental models both use `updated_timestamp`.
 
 ## Step 2 - Load the sample data
+
+**Skip this step in volume mode.**
 
 [01_source/load_data.py](01_source/load_data.py) reads the connection string from an environment
 variable. It holds no credentials.
@@ -135,38 +141,58 @@ layer. The Airflow DAG starts it by job ID and then waits for the result.
 For each of the 6 source tables the job does this:
 
 1. Read the maximum `updated_timestamp` that is already in the bronze table.
-2. Ask PostgreSQL through JDBC for the rows that are newer than that value.
+2. Keep only the source rows that are newer than that value.
 3. Merge those rows into `walmart.bronze.<table>` on the primary key. The merge updates the old
    rows and inserts the new rows.
-4. On the first run the bronze table does not exist, so the job reads the full table and creates
-   it.
+4. On the first run the bronze table does not exist, so the job loads everything and creates the
+   table.
 
-### 4a - Store the database credentials
+Follow **4a** or **4b**, then do **4c**. Both modes produce the same bronze layer.
 
-The job holds no credentials. It reads 3 secrets from a Databricks secret scope:
+### 4a - Volume mode, for Databricks Free Edition
 
-```bash
-databricks secrets create-scope walmart
-databricks secrets put-secret walmart pg-jdbc-url
-databricks secrets put-secret walmart pg-user
-databricks secrets put-secret walmart pg-password
-```
+Free Edition gives you serverless compute only. Serverless cannot install a JDBC driver and
+cannot open a connection to an external database, so the job reads the CSV files instead.
+PostgreSQL is not needed for this mode, and you can skip Step 1 and Step 2.
 
-The JDBC URL has this shape:
+1. Create the volume:
 
-```
-jdbc:postgresql://host:5432/dbname?sslmode=require
-```
+   ```sql
+   CREATE VOLUME IF NOT EXISTS walmart.bronze.landing;
+   ```
 
-### 4b - Create the job
+2. Upload the 6 files from [01_source/data/](01_source/data/) to
+   `/Volumes/walmart/bronze/landing/`. Use **Catalog -> walmart -> bronze -> landing -> Upload**.
+   Keep the file names.
+3. Add a job parameter named `source_mode` with the value `volume`.
+
+### 4b - JDBC mode, for a paid workspace
+
+This mode reads PostgreSQL directly and needs a classic cluster.
+
+1. Store the 3 secrets:
+
+   ```bash
+   databricks secrets create-scope walmart
+   databricks secrets put-secret walmart pg-jdbc-url
+   databricks secrets put-secret walmart pg-user
+   databricks secrets put-secret walmart pg-password
+   ```
+
+   The JDBC URL has this shape: `jdbc:postgresql://host:5432/dbname?sslmode=require`
+
+2. Install `org.postgresql:postgresql:42.7.4` from Maven on the cluster.
+3. Give the cluster network access to your PostgreSQL host.
+4. Add a job parameter named `source_mode` with the value `jdbc`.
+
+### 4c - Create and run the job
 
 1. Upload `cdc_bronze.py` to your workspace, or connect the workspace to this Git repository.
 2. Create a job with one task that points at the file.
-3. Install the PostgreSQL driver on the cluster. The Maven coordinate is
-   `org.postgresql:postgresql:42.7.4`.
-4. Give the cluster network access to your PostgreSQL host.
-5. Run the job one time by hand. The output prints the row count for each table.
-6. Copy the job ID from the job page URL. Step 9 puts it in `.env`.
+3. Run the job one time by hand. The output prints the mode and a row count for each table.
+4. Copy the job ID from the job page URL. Step 9 puts it in `.env`.
+
+Check the result with `SELECT COUNT(*) FROM walmart.bronze.orders`. Expect 10000 rows.
 
 ## Step 5 - Create the dbt project
 
@@ -495,8 +521,10 @@ docker compose exec airflow-worker bash -lc "cd /opt/airflow/dbt && dbt snapshot
 
 ## Known limitations
 
-- The CDC job needs a cluster that can install a Maven library and reach your PostgreSQL host.
-  Serverless compute usually allows neither, so use a classic cluster.
+- JDBC mode needs a classic cluster that can install a Maven library and reach your PostgreSQL
+  host. Serverless compute allows neither. Volume mode exists for that reason.
+- Volume mode reads a static CSV file, so it shows no new rows on a second run. To see the
+  incremental path work, edit a CSV, raise the `updated_timestamp` values, and upload it again.
 - `obt_b.sql` writes the full `walmart.silver_t.*` table names instead of `ref()`. dbt therefore
   does not know that the silver technical layer comes first, and only the DAG enforces the order.
 - Source freshness gives a warning but never an error. The sample data carries fixed timestamps,
@@ -513,7 +541,7 @@ No credential is written in any tracked file. Everything reads from the environm
 | `DATABRICKS_HTTP_PATH` | dbt |
 | `DATABRICKS_JOB_ID` | The `ingest_cdc` task |
 | `FERNET_KEY` | Airflow, to encrypt stored connections |
-| `POSTGRES_CONN_STRING` | `01_source/load_data.py`, on your machine only |
+| `POSTGRES_CONN_STRING` | `01_source/load_data.py`, on your machine, JDBC mode only |
 
 The first five live in `04_orchestration/.env`, which `.gitignore` excludes. Use
 [.env.example](.env.example) as the template.

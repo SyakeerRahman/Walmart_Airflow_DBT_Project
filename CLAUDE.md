@@ -13,7 +13,7 @@ Directories are numbered in pipeline order. Keep that convention when adding one
 | Path | Role |
 | --- | --- |
 | [01_source/](01_source/) | Seed CSVs, Postgres DDL, `load_data.py` loader. One-time setup of the source OLTP DB. |
-| [02_ingestion/cdc_bronze.py](02_ingestion/cdc_bronze.py) | PySpark CDC job. Runs **in Databricks**, not in Airflow. JDBC read from Postgres `raw.*`, watermarked on `updated_timestamp`, Delta `MERGE` into `walmart.bronze.*` on the PK. Airflow only triggers it by job id. |
+| [02_ingestion/cdc_bronze.py](02_ingestion/cdc_bronze.py) | PySpark CDC job. Runs **in Databricks**, not in Airflow. Two source modes (`source_mode` job param): `volume` reads CSVs from `/Volumes/walmart/bronze/landing/` (works on serverless/Free Edition), `jdbc` reads Postgres `raw.*` (needs a classic cluster + Maven driver). Both watermark on `updated_timestamp` and Delta `MERGE` into `walmart.bronze.*` on the PK. |
 | [03_transform/](03_transform/) | The dbt project. Mounted into containers at `/opt/airflow/dbt` via a `../03_transform` relative volume in compose. |
 | [04_orchestration/](04_orchestration/) | Docker Compose Airflow 3.2 stack (CeleryExecutor + Postgres + Redis). |
 | [04_orchestration/dags/orchestrate.py](04_orchestration/dags/orchestrate.py) | The only DAG. Drives every dbt step as a Bash task. |
@@ -65,7 +65,8 @@ Layer contract, which drives where new models go:
 
 ## Known rough edges
 
-- `cdc_bronze.py` reads secrets from the Databricks scope `walmart` (keys `pg-jdbc-url`, `pg-user`, `pg-password`), falling back to `PG_JDBC_URL`/`PG_USER`/`PG_PASSWORD` env vars. Its cluster needs the Maven lib `org.postgresql:postgresql:42.7.4` and network reach to Postgres - serverless compute typically supports neither.
+- `cdc_bronze.py` defaults to `volume` mode. Only `jdbc` mode needs secrets (scope `walmart`, keys `pg-jdbc-url`/`pg-user`/`pg-password`, env fallback `PG_JDBC_URL`/`PG_USER`/`PG_PASSWORD`), the Maven lib `org.postgresql:postgresql:42.7.4`, and a classic cluster. Serverless supports neither, which is why volume mode exists.
+- Volume mode needs explicit DDL schemas (`SCHEMAS` dict) because CSV type inference is unreliable. They mirror `01_source/ddl/walmart_schema.sql` - keep the two in sync if a column changes.
 - Bronze is a faithful mirror: the CDC job adds **no** audit columns. `silver_t` models are `SELECT *`, so any column added to bronze silently flows downstream and can break the incremental models (`on_schema_change` is unset).
 - `obt_b.sql` bypasses `ref()`, so the silver_t -> silver_b edge exists only in the DAG (see Conventions).
 - Source freshness is warn-only (`warn_after: 24 hours`, no `error_after`). The seed data has fixed timestamps, so an error threshold would fail every run.
