@@ -1,7 +1,7 @@
 import os
 import time
 from airflow.sdk import dag, task
-from airflow.operators.bash import BashOperator
+from airflow.providers.standard.operators.bash import BashOperator
 from databricks.sdk import WorkspaceClient
 from databricks.sdk.service.jobs import RunLifeCycleState, RunResultState
 
@@ -94,7 +94,7 @@ def orchestrate():
     gold_facts = BashOperator(
         task_id='gold_facts',
         cwd='/opt/airflow/dbt',
-        bash_command='dbt run --select gold/fact'
+        bash_command='dbt run --select gold.fact'
     )
 
     (
